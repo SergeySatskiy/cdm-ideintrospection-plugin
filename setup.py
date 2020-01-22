@@ -63,7 +63,7 @@ setup(name='cdmideintrospectionplugin',
       version=getPluginVersion(),
       author='Sergey Satskiy',
       author_email='sergey.satskiy@gmail.com',
-      url='https://github.com/SergeySatskiy/cdm-ideintrospection',
+      url='https://github.com/SergeySatskiy/cdm-ideintrospection-plugin',
       license='GPLv3',
       classifiers=[
           'Development Status :: 5 - Production/Stable',
@@ -75,5 +75,4 @@ setup(name='cdmideintrospectionplugin',
       packages=['cdmplugins', 'cdmplugins.ideintrospection'],
       install_requires=['pympler'],
       package_data={'cdmplugins.ideintrospection':
-                    [plugin_desc_file, 'generate.png', 'output.png',
-                     'pylint.png']})
+                    [plugin_desc_file, 'summary.png']})

@@ -21,10 +21,11 @@
 
 
 import os.path
+from pympler import summary, muppy
 from distutils.version import StrictVersion
 from plugins.categories.wizardiface import WizardInterface
 from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt,
-                   QShortcut, QKeySequence, QAction, QMenu)
+                   QShortcut, QKeySequence, QAction, QMenu, QDialog)
 from utils.fileutils import loadJSON, saveJSON
 from .introspectionconfigdialog import IntrospectionPluginConfigDialog
 
@@ -34,7 +35,7 @@ PLUGIN_HOME_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
 
 class IntrospectionPlugin(WizardInterface):
 
-    """Codimension pylint plugin"""
+    """Codimension introspection plugin"""
 
     def __init__(self):
         WizardInterface.__init__(self)
@@ -49,7 +50,7 @@ class IntrospectionPlugin(WizardInterface):
         the current IDE version.
         True should be returned if the plugin is compatible with the IDE.
         """
-        return StrictVersion(ideVersion) > StrictVersion('4.6.0')
+        return StrictVersion(ideVersion) > StrictVersion('4.7.1')
 
     def activate(self, ideSettings, ideGlobalData):
         """Activates the plugin.
@@ -68,6 +69,15 @@ class IntrospectionPlugin(WizardInterface):
         WizardInterface.activate(self, ideSettings, ideGlobalData)
 
         self.__where = self.__getConfiguredWhere()
+        mainToolbar = self.ide.mainWindow.getToolbar()
+        beforeWidget = mainToolbar.findChild(QAction, 'debugSpacer')
+        self.__separator = mainToolbar.insertSeparator(beforeWidget)
+
+        self.__memSummaryButton = QAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
+                                          'Memory summary', mainToolbar)
+        self.__memSummaryButton.triggered.connect(self.__memSummary)
+        self.__memSummaryButton.setObjectName('memSummaryButton')
+        mainToolbar.insertAction(beforeWidget, self.__memSummaryButton)
 
     def deactivate(self):
         """Deactivates the plugin.
@@ -77,6 +87,12 @@ class IntrospectionPlugin(WizardInterface):
         Note: if overriden do not forget to call the
               base class deactivate()
         """
+        mainToolbar = self.ide.mainWindow.getToolbar()
+        self.__memSummaryButton.triggered.disconnect(self.__memSummary)
+        mainToolbar.removeAction(self.__memSummaryButton)
+        self.__memSummaryButton.deleteLater()
+        mainToolbar.removeAction(self.__separator)
+        self.__separator.deleteLater()
 
         WizardInterface.deactivate(self)
 
@@ -191,4 +207,10 @@ class IntrospectionPlugin(WizardInterface):
         """Saves the configured where"""
         saveJSON(self.__getConfigFile(), {'where': self.__where},
                  "introspection plugin settings")
+
+    def __memSummary(self):
+        """Provides the memory summary"""
+        allObjects = muppy.get_objects(remove_dups=True, include_frames=False)
+        memSummary = summary.summarize(allObjects)
+        summary.print_(memSummary, limit=10000)
 

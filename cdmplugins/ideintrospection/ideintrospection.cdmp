@@ -1,11 +1,11 @@
 [Core]
-Name = Pylint
+Name = IDE introspection
 Module = .
 
 [Documentation]
 Author = Sergey Satskiy <sergey.satskiy@gmail.com>
-Version = 1.0.2
+Version = 1.0.0
 Website = http://codimension.org
-Description = Codimension IDE pylint plugin
+Description = Codimension IDE introspection plugin
 License = GPL v.3
 
