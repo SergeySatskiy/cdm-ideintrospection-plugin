@@ -21,11 +21,12 @@
 
 
 import os.path
+import logging
 from pympler import summary, muppy
 from distutils.version import StrictVersion
 from plugins.categories.wizardiface import WizardInterface
-from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt,
-                   QShortcut, QKeySequence, QAction, QMenu, QDialog)
+from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt, QMenu,
+                   QAction, QMenu, QDialog, QToolButton)
 from utils.fileutils import loadJSON, saveJSON
 from .introspectionconfigdialog import IntrospectionPluginConfigDialog
 
@@ -50,7 +51,7 @@ class IntrospectionPlugin(WizardInterface):
         the current IDE version.
         True should be returned if the plugin is compatible with the IDE.
         """
-        return StrictVersion(ideVersion) > StrictVersion('4.7.1')
+        return StrictVersion(ideVersion) >= StrictVersion('4.7.0')
 
     def activate(self, ideSettings, ideGlobalData):
         """Activates the plugin.
@@ -73,11 +74,27 @@ class IntrospectionPlugin(WizardInterface):
         beforeWidget = mainToolbar.findChild(QAction, 'debugSpacer')
         self.__separator = mainToolbar.insertSeparator(beforeWidget)
 
-        self.__memSummaryButton = QAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
-                                          'Memory summary', mainToolbar)
-        self.__memSummaryButton.triggered.connect(self.__memSummary)
+        memButton = QToolButton(mainToolbar)
+        memButton.setIcon(QIcon(PLUGIN_HOME_DIR + 'summary.png'))
+        memButton.setToolTip('Print memory objects')
+        memButton.setPopupMode(QToolButton.InstantPopup)
+        memButton.setMenu(self.__createMemoryMenu())
+        memButton.setFocusPolicy(Qt.NoFocus)
+
+        self.__memSummaryButton = mainToolbar.insertWidget(beforeWidget,
+                                                           memButton)
         self.__memSummaryButton.setObjectName('memSummaryButton')
-        mainToolbar.insertAction(beforeWidget, self.__memSummaryButton)
+
+    def __createMemoryMenu(self):
+        """Creates the memory button menu"""
+        memMenu = QMenu()
+        fullAct = memMenu.addAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
+                                    'Full memory objects list')
+        fullAct.triggered.connect(self.__onFullMemoryReport)
+        reducedAct = memMenu.addAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
+                                       'Memory objects without functions and modules')
+        reducedAct.triggered.connect(self.__onReducedMemoryReport)
+        return memMenu
 
     def deactivate(self):
         """Deactivates the plugin.
@@ -208,9 +225,33 @@ class IntrospectionPlugin(WizardInterface):
         saveJSON(self.__getConfigFile(), {'where': self.__where},
                  "introspection plugin settings")
 
+    def __onFullMemoryReport(self):
+        """No reductions memory report"""
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        try:
+            allObjects = muppy.get_objects(remove_dups=True,
+                                           include_frames=False)
+            memSummary = summary.summarize(allObjects)
+        except Exception as exc:
+            logging.error(str(exc))
+            QApplication.restoreOverrideCursor()
+            return
+        QApplication.restoreOverrideCursor()
+        summary.print_(memSummary, limit=10000)
+
+    def __onReducedMemoryReport(self):
+        """No functions/no modules memory report"""
+
     def __memSummary(self):
         """Provides the memory summary"""
-        allObjects = muppy.get_objects(remove_dups=True, include_frames=False)
-        memSummary = summary.summarize(allObjects)
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        try:
+            allObjects = muppy.get_objects(remove_dups=True, include_frames=False)
+            memSummary = summary.summarize(allObjects)
+        except Exception as exc:
+            logging.error(str(exc))
+            QApplication.restoreOverrideCursor()
+            return
+        QApplication.restoreOverrideCursor()
         summary.print_(memSummary, limit=10000)
 
