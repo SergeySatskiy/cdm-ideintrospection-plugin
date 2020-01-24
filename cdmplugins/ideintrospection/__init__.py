@@ -22,7 +22,11 @@
 
 import os.path
 import logging
-from pympler import summary, muppy
+import inspect
+import linecache
+import os
+import tracemalloc
+from pympler import summary, muppy, tracker, refbrowser
 from distutils.version import StrictVersion
 from plugins.categories.wizardiface import WizardInterface
 from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt, QMenu,
@@ -32,6 +36,32 @@ from .introspectionconfigdialog import IntrospectionPluginConfigDialog
 
 
 PLUGIN_HOME_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
+
+
+def display_top(snapshot, key_type='lineno', limit=10):
+    snapshot = snapshot.filter_traces((
+        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        tracemalloc.Filter(False, "<unknown>"),
+    ))
+    top_stats = snapshot.statistics(key_type)
+
+    print("Top %s lines" % limit)
+    for index, stat in enumerate(top_stats[:limit], 1):
+        frame = stat.traceback[0]
+        # replace "/path/to/module/file.py" with "module/file.py"
+        filename = os.sep.join(frame.filename.split(os.sep)[-2:])
+        print("#%s: %s:%s: %.1f KiB"
+              % (index, filename, frame.lineno, stat.size / 1024))
+        line = linecache.getline(frame.filename, frame.lineno).strip()
+        if line:
+            print('    %s' % line)
+
+    other = top_stats[limit:]
+    if other:
+        size = sum(stat.size for stat in other)
+        print("%s other: %.1f KiB" % (len(other), size / 1024))
+    total = sum(stat.size for stat in top_stats)
+    print("Total allocated size: %.1f KiB" % (total / 1024))
 
 
 class IntrospectionPlugin(WizardInterface):
@@ -69,31 +99,55 @@ class IntrospectionPlugin(WizardInterface):
         """
         WizardInterface.activate(self, ideSettings, ideGlobalData)
 
-        self.__where = self.__getConfiguredWhere()
-        mainToolbar = self.ide.mainWindow.getToolbar()
-        beforeWidget = mainToolbar.findChild(QAction, 'debugSpacer')
-        self.__separator = mainToolbar.insertSeparator(beforeWidget)
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        try:
+            self.__where = self.__getConfiguredWhere()
+            mainToolbar = self.ide.mainWindow.getToolbar()
+            beforeWidget = mainToolbar.findChild(QAction, 'debugSpacer')
+            self.__separator = mainToolbar.insertSeparator(beforeWidget)
 
-        memButton = QToolButton(mainToolbar)
-        memButton.setIcon(QIcon(PLUGIN_HOME_DIR + 'summary.png'))
-        memButton.setToolTip('Print memory objects')
-        memButton.setPopupMode(QToolButton.InstantPopup)
-        memButton.setMenu(self.__createMemoryMenu())
-        memButton.setFocusPolicy(Qt.NoFocus)
+            memButton = QToolButton(mainToolbar)
+            memButton.setIcon(QIcon(PLUGIN_HOME_DIR + 'summary.png'))
+            memButton.setToolTip('Print memory objects')
+            memButton.setPopupMode(QToolButton.InstantPopup)
+            memButton.setMenu(self.__createMemoryMenu())
+            memButton.setFocusPolicy(Qt.NoFocus)
 
-        self.__memSummaryButton = mainToolbar.insertWidget(beforeWidget,
-                                                           memButton)
-        self.__memSummaryButton.setObjectName('memSummaryButton')
+            self.__memSummaryButton = mainToolbar.insertWidget(beforeWidget,
+                                                               memButton)
+            self.__memSummaryButton.setObjectName('memSummaryButton')
+
+            self.__diffButton = QAction(QIcon(PLUGIN_HOME_DIR + 'diff.png'),
+                                        'Memory usage diff', mainToolbar)
+            self.__diffButton.triggered.connect(self.__memoryDiff)
+            self.__diffButton = mainToolbar.insertAction(beforeWidget,
+                                                         self.__diffButton)
+
+            self.__refButton = QAction(QIcon(PLUGIN_HOME_DIR + 'ref.png'),
+                                       'Reference browser', mainToolbar)
+            self.__refButton.triggered.connect(self.__referenceBrowser)
+            self.__refButton = mainToolbar.insertAction(beforeWidget,
+                                                        self.__refButton)
+
+            self.__tracker = tracker.SummaryTracker()
+            tracemalloc.start()
+            self.__lastSnapshot = tracemalloc.take_snapshot()
+        except:
+            QApplication.restoreOverrideCursor()
+            raise
+        QApplication.restoreOverrideCursor()
 
     def __createMemoryMenu(self):
         """Creates the memory button menu"""
         memMenu = QMenu()
-        fullAct = memMenu.addAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
-                                    'Full memory objects list')
-        fullAct.triggered.connect(self.__onFullMemoryReport)
-        reducedAct = memMenu.addAction(QIcon(PLUGIN_HOME_DIR + 'summary.png'),
-                                       'Memory objects without functions and modules')
-        reducedAct.triggered.connect(self.__onReducedMemoryReport)
+        self.fullAct = memMenu.addAction(
+            QIcon(PLUGIN_HOME_DIR + 'summary.png'),
+            'Full memory objects list')
+        self.fullAct.triggered.connect(self.__onFullMemoryReport)
+        self.reducedAct = memMenu.addAction(
+            QIcon(PLUGIN_HOME_DIR + 'summary.png'),
+            'Memory objects without functions and modules')
+        self.reducedAct.triggered.connect(self.__onReducedMemoryReport)
         return memMenu
 
     def deactivate(self):
@@ -104,12 +158,20 @@ class IntrospectionPlugin(WizardInterface):
         Note: if overriden do not forget to call the
               base class deactivate()
         """
+        self.__tracker = None
+
+        self.fullAct.triggered.disconnect(self.__onFullMemoryReport)
+        self.reducedAct.triggered.disconnect(self.__onReducedMemoryReport)
+        self.__diffButton.triggered.disconnect(self.__memoryDiff)
+        self.__refButton.triggered.disconnect(self.__referenceBrowser)
+
         mainToolbar = self.ide.mainWindow.getToolbar()
-        self.__memSummaryButton.triggered.disconnect(self.__memSummary)
         mainToolbar.removeAction(self.__memSummaryButton)
         self.__memSummaryButton.deleteLater()
         mainToolbar.removeAction(self.__separator)
         self.__separator.deleteLater()
+        self.__diffButton.deleteLater()
+        self.__refButton.deleteLater()
 
         WizardInterface.deactivate(self)
 
@@ -125,66 +187,19 @@ class IntrospectionPlugin(WizardInterface):
         return self.configure
 
     def populateMainMenu(self, parentMenu):
-        """Populates the main menu.
-
-        The main menu looks as follows:
-        Plugins
-            - Plugin manager (fixed item)
-            - Separator (fixed item)
-            - <Plugin #1 name> (this is the parentMenu passed)
-            ...
-        If no items were populated by the plugin then there will be no
-        <Plugin #N name> menu item shown.
-        It is suggested to insert plugin configuration item here if so.
-        """
+        """Populates the main menu"""
         del parentMenu      # unused argument
 
     def populateFileContextMenu(self, parentMenu):
-        """Populates the file context menu.
-
-        The file context menu shown in the project viewer window will have
-        an item with a plugin name and subitems which are populated here.
-        If no items were populated then the plugin menu item will not be
-        shown.
-
-        When a callback is called the corresponding menu item will have
-        attached data with an absolute path to the item.
-        """
+        """Populates the file context menu"""
         del parentMenu      # unused argument
 
     def populateDirectoryContextMenu(self, parentMenu):
-        """Populates the directory context menu.
-
-        The directory context menu shown in the project viewer window will
-        have an item with a plugin name and subitems which are populated
-        here. If no items were populated then the plugin menu item will not
-        be shown.
-
-        When a callback is called the corresponding menu item will have
-        attached data with an absolute path to the directory.
-        """
+        """Populates the directory context menu"""
         del parentMenu      # unused argument
 
     def populateBufferContextMenu(self, parentMenu):
-        """Populates the editing buffer context menu.
-
-        The buffer context menu shown for the current edited/viewed file
-        will have an item with a plugin name and subitems which are
-        populated here. If no items were populated then the plugin menu
-        item will not be shown.
-
-        Note: when a buffer context menu is selected by the user it always
-              refers to the current widget. To get access to the current
-              editing widget the plugin can use: self.ide.currentEditorWidget
-              The widget could be of different types and some circumstances
-              should be considered, e.g.:
-              - it could be a new file which has not been saved yet
-              - it could be modified
-              - it could be that the disk file has already been deleted
-              - etc.
-              Having the current widget reference the plugin is able to
-              retrieve the information it needs.
-        """
+        """Populates the editing buffer context menu"""
         del parentMenu
 
     def configure(self):
@@ -232,26 +247,56 @@ class IntrospectionPlugin(WizardInterface):
             allObjects = muppy.get_objects(remove_dups=True,
                                            include_frames=False)
             memSummary = summary.summarize(allObjects)
+            summary.print_(memSummary, limit=10000)
         except Exception as exc:
             logging.error(str(exc))
-            QApplication.restoreOverrideCursor()
-            return
         QApplication.restoreOverrideCursor()
-        summary.print_(memSummary, limit=10000)
 
     def __onReducedMemoryReport(self):
         """No functions/no modules memory report"""
-
-    def __memSummary(self):
-        """Provides the memory summary"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
-            allObjects = muppy.get_objects(remove_dups=True, include_frames=False)
+            allObjects = muppy.get_objects(remove_dups=True,
+                                           include_frames=False)
+            allObjects = [x for x in allObjects
+                             if not inspect.isfunction(x) and
+                                not inspect.ismodule(x)]
             memSummary = summary.summarize(allObjects)
+            summary.print_(memSummary, limit=10000)
+
+            print('Tracemalloc report')
+            display_top(tracemalloc.take_snapshot(), key_type='traceback')
+
         except Exception as exc:
             logging.error(str(exc))
-            QApplication.restoreOverrideCursor()
-            return
         QApplication.restoreOverrideCursor()
-        summary.print_(memSummary, limit=10000)
+
+    def __memoryDiff(self):
+        """Prints the memory difference"""
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        try:
+            currentSnapshot = tracemalloc.take_snapshot()
+            self.__lastSnapshot = tracemalloc.take_snapshot()
+            topStats = currentSnapshot.compare_to(self.__lastSnapshot,
+                                                  'traceback')
+            self.__lastSnapshot = self.__lastSnapshot
+            for stat in topStats:
+                print(stat)
+
+            self.__tracker.print_diff()
+        except Exception as exc:
+            logging.error(str(exc))
+        QApplication.restoreOverrideCursor()
+
+    def __referenceBrowser(self):
+        """Brings up a reference browser"""
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        ib = None
+        try:
+            ib = refbrowser.InteractiveBrowser(self.ide.mainWindow)
+        except Exception as exc:
+            logging.error(str(exc))
+        QApplication.restoreOverrideCursor()
+        if ib is not None:
+            ib.main()
 

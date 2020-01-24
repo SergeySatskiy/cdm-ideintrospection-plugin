@@ -75,4 +75,4 @@ setup(name='cdmideintrospectionplugin',
       packages=['cdmplugins', 'cdmplugins.ideintrospection'],
       install_requires=['pympler'],
       package_data={'cdmplugins.ideintrospection':
-                    [plugin_desc_file, 'summary.png']})
+                    [plugin_desc_file, 'summary.png', 'diff.png', 'ref.png']})
