@@ -233,7 +233,7 @@ class IntrospectionPlugin(WizardInterface):
             allObjects, totalMemory = self.__getObjectsAndTotalMemory()
             memSummary = summary.summarize(allObjects)
             summary.print_(memSummary, limit=750)
-            print('Total memory: ' + str(totalMemory))
+            print(f'Total memory: {totalMemory:,} bytes')
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
@@ -248,7 +248,7 @@ class IntrospectionPlugin(WizardInterface):
                                 not inspect.ismodule(x)]
             memSummary = summary.summarize(allObjects)
             summary.print_(memSummary, limit=750)
-            print('Total memory: ' + str(totalMemory))
+            print(f'Total memory: {totalMemory:,} bytes')
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
@@ -259,9 +259,9 @@ class IntrospectionPlugin(WizardInterface):
         try:
             _, totalMemory = self.__getObjectsAndTotalMemory()
             self.__tracker.print_diff()
-            print('Memory difference: ' + str(totalMemory -
-                                              self.__lastTotalMemory))
-            print('Total memory: ' + str(totalMemory))
+            memDiff = totalMemory - self.__lastTotalMemory
+            print(f'Memory difference: {memDiff:,} bytes')
+            print(f'Total memory: {totalMemory:,} bytes')
             self.__lastTotalMemory = totalMemory
         except Exception as exc:
             logging.error(str(exc))
