@@ -20,12 +20,12 @@
 """Codimension ide introspection plugin implementation"""
 
 
+from sys import getsizeof
 import os.path
 import logging
 import inspect
 import linecache
 import os
-import tracemalloc
 from pympler import summary, muppy, tracker, refbrowser
 from distutils.version import StrictVersion
 from plugins.categories.wizardiface import WizardInterface
@@ -36,32 +36,6 @@ from .introspectionconfigdialog import IntrospectionPluginConfigDialog
 
 
 PLUGIN_HOME_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
-
-
-def display_top(snapshot, key_type='lineno', limit=10):
-    snapshot = snapshot.filter_traces((
-        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
-        tracemalloc.Filter(False, "<unknown>"),
-    ))
-    top_stats = snapshot.statistics(key_type)
-
-    print("Top %s lines" % limit)
-    for index, stat in enumerate(top_stats[:limit], 1):
-        frame = stat.traceback[0]
-        # replace "/path/to/module/file.py" with "module/file.py"
-        filename = os.sep.join(frame.filename.split(os.sep)[-2:])
-        print("#%s: %s:%s: %.1f KiB"
-              % (index, filename, frame.lineno, stat.size / 1024))
-        line = linecache.getline(frame.filename, frame.lineno).strip()
-        if line:
-            print('    %s' % line)
-
-    other = top_stats[limit:]
-    if other:
-        size = sum(stat.size for stat in other)
-        print("%s other: %.1f KiB" % (len(other), size / 1024))
-    total = sum(stat.size for stat in top_stats)
-    print("Total allocated size: %.1f KiB" % (total / 1024))
 
 
 class IntrospectionPlugin(WizardInterface):
@@ -129,9 +103,8 @@ class IntrospectionPlugin(WizardInterface):
             self.__refButton = mainToolbar.insertAction(beforeWidget,
                                                         self.__refButton)
 
+            _, self.__lastTotalMemory = self.__getObjectsAndTotalMemory()
             self.__tracker = tracker.SummaryTracker()
-            tracemalloc.start()
-            self.__lastSnapshot = tracemalloc.take_snapshot()
         except:
             QApplication.restoreOverrideCursor()
             raise
@@ -240,14 +213,27 @@ class IntrospectionPlugin(WizardInterface):
         saveJSON(self.__getConfigFile(), {'where': self.__where},
                  "introspection plugin settings")
 
+    def __getTotalSize(self, objects):
+        """Provides the all allocated memory"""
+        total = 0
+        for item in objects:
+            total += getsizeof(item)
+        return total
+
+    def __getObjectsAndTotalMemory(self):
+        """Provides the objects list and total allocated memory"""
+        allObjects = muppy.get_objects(remove_dups=True,
+                                       include_frames=False)
+        return allObjects, self.__getTotalSize(allObjects)
+
     def __onFullMemoryReport(self):
         """No reductions memory report"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
-            allObjects = muppy.get_objects(remove_dups=True,
-                                           include_frames=False)
+            allObjects, totalMemory = self.__getObjectsAndTotalMemory()
             memSummary = summary.summarize(allObjects)
-            summary.print_(memSummary, limit=10000)
+            summary.print_(memSummary, limit=750)
+            print('Total memory: ' + str(totalMemory))
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
@@ -256,17 +242,13 @@ class IntrospectionPlugin(WizardInterface):
         """No functions/no modules memory report"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
-            allObjects = muppy.get_objects(remove_dups=True,
-                                           include_frames=False)
+            allObjects, totalMemory = self.__getObjectsAndTotalMemory()
             allObjects = [x for x in allObjects
                              if not inspect.isfunction(x) and
                                 not inspect.ismodule(x)]
             memSummary = summary.summarize(allObjects)
-            summary.print_(memSummary, limit=10000)
-
-            print('Tracemalloc report')
-            display_top(tracemalloc.take_snapshot(), key_type='traceback')
-
+            summary.print_(memSummary, limit=750)
+            print('Total memory: ' + str(totalMemory))
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
@@ -275,15 +257,12 @@ class IntrospectionPlugin(WizardInterface):
         """Prints the memory difference"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
-            currentSnapshot = tracemalloc.take_snapshot()
-            self.__lastSnapshot = tracemalloc.take_snapshot()
-            topStats = currentSnapshot.compare_to(self.__lastSnapshot,
-                                                  'traceback')
-            self.__lastSnapshot = self.__lastSnapshot
-            for stat in topStats:
-                print(stat)
-
+            _, totalMemory = self.__getObjectsAndTotalMemory()
             self.__tracker.print_diff()
+            print('Memory difference: ' + str(totalMemory -
+                                              self.__lastTotalMemory))
+            print('Total memory: ' + str(totalMemory))
+            self.__lastTotalMemory = totalMemory
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
