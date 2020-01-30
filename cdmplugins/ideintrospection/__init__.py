@@ -222,8 +222,8 @@ class IntrospectionPlugin(WizardInterface):
 
     def __getObjectsAndTotalMemory(self):
         """Provides the objects list and total allocated memory"""
-        allObjects = muppy.get_objects(remove_dups=True,
-                                       include_frames=False)
+        allObjects = muppy.get_objects(remove_dups=False,
+                                       include_frames=True)
         return allObjects, self.__getTotalSize(allObjects)
 
     def __onFullMemoryReport(self):
@@ -270,12 +270,11 @@ class IntrospectionPlugin(WizardInterface):
     def __referenceBrowser(self):
         """Brings up a reference browser"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        ib = None
+        browser = None
         try:
-            ib = refbrowser.InteractiveBrowser(self.ide.mainWindow)
+            browser = refbrowser.FileBrowser(self.ide.mainWindow, 4)
+            browser.print_tree('memtree.txt')
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
-        if ib is not None:
-            ib.main()
 
