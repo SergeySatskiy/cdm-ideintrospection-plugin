@@ -272,7 +272,7 @@ class IntrospectionPlugin(WizardInterface):
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         browser = None
         try:
-            browser = refbrowser.FileBrowser(self.ide.mainWindow, 4)
+            browser = refbrowser.FileBrowser(self.ide.mainWindow, 3)
             browser.print_tree('memtree.txt')
         except Exception as exc:
             logging.error(str(exc))
