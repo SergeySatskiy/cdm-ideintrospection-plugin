@@ -33,6 +33,7 @@ from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt, QMenu,
                    QAction, QMenu, QDialog, QToolButton)
 from utils.fileutils import loadJSON, saveJSON
 from .introspectionconfigdialog import IntrospectionPluginConfigDialog
+from mem_top import mem_top
 
 
 PLUGIN_HOME_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
@@ -243,12 +244,13 @@ class IntrospectionPlugin(WizardInterface):
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
             allObjects, totalMemory = self.__getObjectsAndTotalMemory()
-            allObjects = [x for x in allObjects
-                             if not inspect.isfunction(x) and
-                                not inspect.ismodule(x)]
-            memSummary = summary.summarize(allObjects)
-            summary.print_(memSummary, limit=750)
+#            allObjects = [x for x in allObjects
+#                             if not inspect.isfunction(x) and
+#                                not inspect.ismodule(x)]
+#            memSummary = summary.summarize(allObjects)
+#            summary.print_(memSummary, limit=750)
             print(f'Total memory: {totalMemory:,} bytes')
+            print(mem_top(limit=100, width=400))
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
@@ -269,12 +271,22 @@ class IntrospectionPlugin(WizardInterface):
 
     def __referenceBrowser(self):
         """Brings up a reference browser"""
+        import time
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        browser = None
-        try:
-            browser = refbrowser.FileBrowser(self.ide.mainWindow, 3)
-            browser.print_tree('memtree.txt')
-        except Exception as exc:
-            logging.error(str(exc))
+        for x in range(100):
+            self.ide.mainWindow.em.openFile('/export/home/satskyse/codimension/codimension/flowui/cml.py', 10)
+            QApplication.processEvents()
+            time.sleep(0.001)
+            self.ide.mainWindow.em.onCloseTab()
+            self.ide.showStatusBarMessage('Loop done: ' + str(x))
+            QApplication.processEvents()
+            time.sleep(0.001)
+
+#        browser = None
+#        try:
+#            browser = refbrowser.FileBrowser(self.ide.mainWindow, 3)
+#            browser.print_tree('memtree.txt')
+#        except Exception as exc:
+#            logging.error(str(exc))
         QApplication.restoreOverrideCursor()
 
