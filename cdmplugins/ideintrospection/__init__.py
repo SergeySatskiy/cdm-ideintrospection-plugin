@@ -20,20 +20,20 @@
 """Codimension ide introspection plugin implementation"""
 
 
-from sys import getsizeof
 import os.path
 import logging
-import inspect
-import linecache
 import os
-from pympler import summary, muppy, tracker, refbrowser
+import pdb
+import sys
+from guppy import hpy
+from mem_top import mem_top
+from PyQt5.QtCore import pyqtRemoveInputHook, pyqtRestoreInputHook
 from distutils.version import StrictVersion
 from plugins.categories.wizardiface import WizardInterface
 from ui.qt import (QWidget, QIcon, QTabBar, QApplication, QCursor, Qt, QMenu,
                    QAction, QMenu, QDialog, QToolButton)
 from utils.fileutils import loadJSON, saveJSON
 from .introspectionconfigdialog import IntrospectionPluginConfigDialog
-from mem_top import mem_top
 
 
 PLUGIN_HOME_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
@@ -46,6 +46,7 @@ class IntrospectionPlugin(WizardInterface):
     def __init__(self):
         WizardInterface.__init__(self)
         self.__where = IntrospectionPluginConfigDialog.CONSOLE
+        self.heap = None
 
     @staticmethod
     def isIDEVersionCompatible(ideVersion):
@@ -76,53 +77,28 @@ class IntrospectionPlugin(WizardInterface):
 
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
+
             self.__where = self.__getConfiguredWhere()
             mainToolbar = self.ide.mainWindow.getToolbar()
             beforeWidget = mainToolbar.findChild(QAction, 'debugSpacer')
             self.__separator = mainToolbar.insertSeparator(beforeWidget)
 
-            memButton = QToolButton(mainToolbar)
-            memButton.setIcon(QIcon(PLUGIN_HOME_DIR + 'summary.png'))
-            memButton.setToolTip('Print memory objects')
-            memButton.setPopupMode(QToolButton.InstantPopup)
-            memButton.setMenu(self.__createMemoryMenu())
-            memButton.setFocusPolicy(Qt.NoFocus)
+            self.__memtopButton = QAction(QIcon(PLUGIN_HOME_DIR + 'memtop.png'),
+                                          'memtop report', mainToolbar)
+            self.__memtopButton.triggered.connect(self.__onMemtop)
+            mainToolbar.insertAction(beforeWidget, self.__memtopButton)
 
-            self.__memSummaryButton = mainToolbar.insertWidget(beforeWidget,
-                                                               memButton)
-            self.__memSummaryButton.setObjectName('memSummaryButton')
+            self.__debuggerButton = QAction(QIcon(PLUGIN_HOME_DIR + 'debugger.png'),
+                                            'stop with debugger', mainToolbar)
+            self.__debuggerButton.triggered.connect(self.__onDebugger)
+            mainToolbar.insertAction(beforeWidget, self.__debuggerButton)
 
-            self.__diffButton = QAction(QIcon(PLUGIN_HOME_DIR + 'diff.png'),
-                                        'Memory usage diff', mainToolbar)
-            self.__diffButton.triggered.connect(self.__memoryDiff)
-            self.__diffButton = mainToolbar.insertAction(beforeWidget,
-                                                         self.__diffButton)
-
-            self.__refButton = QAction(QIcon(PLUGIN_HOME_DIR + 'ref.png'),
-                                       'Reference browser', mainToolbar)
-            self.__refButton.triggered.connect(self.__referenceBrowser)
-            self.__refButton = mainToolbar.insertAction(beforeWidget,
-                                                        self.__refButton)
-
-            _, self.__lastTotalMemory = self.__getObjectsAndTotalMemory()
-            self.__tracker = tracker.SummaryTracker()
+            self.hpy = hpy()
+            self.hpy.setref()
         except:
             QApplication.restoreOverrideCursor()
             raise
         QApplication.restoreOverrideCursor()
-
-    def __createMemoryMenu(self):
-        """Creates the memory button menu"""
-        memMenu = QMenu()
-        self.fullAct = memMenu.addAction(
-            QIcon(PLUGIN_HOME_DIR + 'summary.png'),
-            'Full memory objects list')
-        self.fullAct.triggered.connect(self.__onFullMemoryReport)
-        self.reducedAct = memMenu.addAction(
-            QIcon(PLUGIN_HOME_DIR + 'summary.png'),
-            'Memory objects without functions and modules')
-        self.reducedAct.triggered.connect(self.__onReducedMemoryReport)
-        return memMenu
 
     def deactivate(self):
         """Deactivates the plugin.
@@ -132,20 +108,19 @@ class IntrospectionPlugin(WizardInterface):
         Note: if overriden do not forget to call the
               base class deactivate()
         """
-        self.__tracker = None
+        self.hpy = None
 
-        self.fullAct.triggered.disconnect(self.__onFullMemoryReport)
-        self.reducedAct.triggered.disconnect(self.__onReducedMemoryReport)
-        self.__diffButton.triggered.disconnect(self.__memoryDiff)
-        self.__refButton.triggered.disconnect(self.__referenceBrowser)
+        self.__memtopButton.disconnect()
+        self.__debuggerButton.disconnect()
+
 
         mainToolbar = self.ide.mainWindow.getToolbar()
-        mainToolbar.removeAction(self.__memSummaryButton)
-        self.__memSummaryButton.deleteLater()
         mainToolbar.removeAction(self.__separator)
+        mainToolbar.removeAction(self.__debuggerButton)
         self.__separator.deleteLater()
-        self.__diffButton.deleteLater()
-        self.__refButton.deleteLater()
+        self.__memtopButton.deleteLater()
+        self.__debuggerButton.deleteLater()
+
 
         WizardInterface.deactivate(self)
 
@@ -214,79 +189,34 @@ class IntrospectionPlugin(WizardInterface):
         saveJSON(self.__getConfigFile(), {'where': self.__where},
                  "introspection plugin settings")
 
-    def __getTotalSize(self, objects):
-        """Provides the all allocated memory"""
-        total = 0
-        for item in objects:
-            total += getsizeof(item)
-        return total
-
-    def __getObjectsAndTotalMemory(self):
-        """Provides the objects list and total allocated memory"""
-        allObjects = muppy.get_objects(remove_dups=False,
-                                       include_frames=True)
-        return allObjects, self.__getTotalSize(allObjects)
-
-    def __onFullMemoryReport(self):
-        """No reductions memory report"""
+    def __onMemtop(self):
+        """mem_top report"""
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         try:
-            allObjects, totalMemory = self.__getObjectsAndTotalMemory()
-            memSummary = summary.summarize(allObjects)
-            summary.print_(memSummary, limit=750)
-            print(f'Total memory: {totalMemory:,} bytes')
-        except Exception as exc:
-            logging.error(str(exc))
-        QApplication.restoreOverrideCursor()
-
-    def __onReducedMemoryReport(self):
-        """No functions/no modules memory report"""
-        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            allObjects, totalMemory = self.__getObjectsAndTotalMemory()
-#            allObjects = [x for x in allObjects
-#                             if not inspect.isfunction(x) and
-#                                not inspect.ismodule(x)]
-#            memSummary = summary.summarize(allObjects)
-#            summary.print_(memSummary, limit=750)
-            print(f'Total memory: {totalMemory:,} bytes')
             print(mem_top(limit=100, width=400))
         except Exception as exc:
             logging.error(str(exc))
         QApplication.restoreOverrideCursor()
 
-    def __memoryDiff(self):
-        """Prints the memory difference"""
-        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            _, totalMemory = self.__getObjectsAndTotalMemory()
-            self.__tracker.print_diff()
-            memDiff = totalMemory - self.__lastTotalMemory
-            print(f'Memory difference: {memDiff:,} bytes')
-            print(f'Total memory: {totalMemory:,} bytes')
-            self.__lastTotalMemory = totalMemory
-        except Exception as exc:
-            logging.error(str(exc))
-        QApplication.restoreOverrideCursor()
+    def __onDebugger(self):
+        """Brings up a debugger"""
+        heap = self.hpy.heap()
+        unreachable = self.hpy.heapu()
+        logging.error("Use 'heap' and 'unreachable' objects. Type 'c' when finished.")
 
-    def __referenceBrowser(self):
-        """Brings up a reference browser"""
-        import time
-        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        for x in range(100):
-            self.ide.mainWindow.em.openFile('/export/home/satskyse/codimension/codimension/flowui/cml.py', 10)
-            QApplication.processEvents()
-            time.sleep(0.001)
-            self.ide.mainWindow.em.onCloseTab()
-            self.ide.showStatusBarMessage('Loop done: ' + str(x))
-            QApplication.processEvents()
-            time.sleep(0.001)
+        oldstdin = sys.stdin
+        oldstdout = sys.stdout
+        oldstderr = sys.stderr
 
-#        browser = None
-#        try:
-#            browser = refbrowser.FileBrowser(self.ide.mainWindow, 3)
-#            browser.print_tree('memtree.txt')
-#        except Exception as exc:
-#            logging.error(str(exc))
-        QApplication.restoreOverrideCursor()
+        sys.stdin = sys.__stdin__
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+
+        pyqtRemoveInputHook()
+        pdb.set_trace()
+        pyqtRestoreInputHook()
+
+        sys.stdin = oldstdin
+        sys.stdout = oldstdout
+        sys.stderr = oldstderr
 
