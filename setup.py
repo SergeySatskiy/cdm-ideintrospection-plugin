@@ -75,5 +75,6 @@ setup(name='cdmideintrospectionplugin',
       packages=['cdmplugins', 'cdmplugins.ideintrospection'],
       install_requires=['mem-top==0.1.6', 'guppy3==3.0.9'],
       package_data={'cdmplugins.ideintrospection':
-                    [plugin_desc_file, 'memtop.png', 'debugger.png']})
+                    [plugin_desc_file, 'memtop.png', 'debugger.png',
+                                       'repeat.png', 'reset.png']})
 

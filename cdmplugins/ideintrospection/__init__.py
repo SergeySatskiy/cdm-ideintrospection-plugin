@@ -25,6 +25,7 @@ import logging
 import os
 import pdb
 import sys
+import gc
 from guppy import hpy
 from mem_top import mem_top
 from PyQt5.QtCore import pyqtRemoveInputHook, pyqtRestoreInputHook
@@ -93,6 +94,17 @@ class IntrospectionPlugin(WizardInterface):
             self.__debuggerButton.triggered.connect(self.__onDebugger)
             mainToolbar.insertAction(beforeWidget, self.__debuggerButton)
 
+            self.__repeatButton = QAction(QIcon(PLUGIN_HOME_DIR + 'repeat.png'),
+                                          'Repeated actions', mainToolbar)
+            self.__repeatButton.triggered.connect(self.__onRepeatedAction)
+            mainToolbar.insertAction(beforeWidget, self.__repeatButton)
+
+            self.__resetButton = QAction(QIcon(PLUGIN_HOME_DIR + 'reset.png'),
+                                         'Reset the heap reference point',
+                                         mainToolbar)
+            self.__resetButton.triggered.connect(self.__onResetHeap)
+            mainToolbar.insertAction(beforeWidget, self.__resetButton)
+
             self.hpy = hpy()
             self.hpy.setref()
         except:
@@ -112,15 +124,21 @@ class IntrospectionPlugin(WizardInterface):
 
         self.__memtopButton.disconnect()
         self.__debuggerButton.disconnect()
-
+        self.__repeatButton.disconnect()
+        self.__resetButton.disconnect()
 
         mainToolbar = self.ide.mainWindow.getToolbar()
         mainToolbar.removeAction(self.__separator)
         mainToolbar.removeAction(self.__debuggerButton)
+        mainToolbar.removeAction(self.__memtopButton)
+        mainToolbar.removeAction(self.__repeatButton)
+        mainToolbar.removeAction(self.__resetButton)
+
         self.__separator.deleteLater()
         self.__memtopButton.deleteLater()
         self.__debuggerButton.deleteLater()
-
+        self.__repeatButton.deleteLater()
+        self.__resetButton.deleteLater()
 
         WizardInterface.deactivate(self)
 
@@ -203,6 +221,7 @@ class IntrospectionPlugin(WizardInterface):
         heap = self.hpy.heap()
         unreachable = self.hpy.heapu()
         logging.error("Use 'heap' and 'unreachable' objects. Type 'c' when finished.")
+        QApplication.processEvents()
 
         oldstdin = sys.stdin
         oldstdout = sys.stdout
@@ -219,4 +238,18 @@ class IntrospectionPlugin(WizardInterface):
         sys.stdin = oldstdin
         sys.stdout = oldstdout
         sys.stderr = oldstderr
+
+    def __onRepeatedAction(self):
+        """Repeated action"""
+        for x in range(100):
+            self.ide.mainWindow.em.newTabClicked(initialContent=None,
+                                                 shortName=str(x) + '.py',
+                                                 mime='text/x-python')
+            QApplication.processEvents()
+            self.ide.mainWindow.em.onCloseTab()
+            QApplication.processEvents()
+
+    def __onResetHeap(self):
+        """Resets the heap reference point"""
+        self.hpy.setref()
 
